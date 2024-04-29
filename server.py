@@ -15,22 +15,30 @@ async def get_search_page(request: Request):
     """
     Serve the search page.
     """
-    return templates.TemplateResponse("search.html", {"request": request, "limit": 5, "query": ""})
+    return templates.TemplateResponse(
+        "search.html", {"request": request, "limit": 5, "query": ""}
+    )
 
 
-@app.post("/search/")
-async def search(request: Request, query: str = Form(...), limit: int = Form(None)):
+@app.get("/search/")
+async def search(request: Request, query: str, limit: Optional[int] = 10):
     """
     Handle the search query and return results.
     """
     try:
-        limit = limit or 10
         results = searcher.find_similar_issues(query, limit)
         return templates.TemplateResponse(
-            "search.html", {"request": request, "results": results, "query": query, "limit": limit}
+            "search.html",
+            {
+                "request": request,
+                "results": results,
+                "query": query,
+                "limit": limit,
+            },
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # Run with `uvicorn server:app --reload` for live updates
 
