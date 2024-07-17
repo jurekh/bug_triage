@@ -25,23 +25,13 @@ def adapt_datetime_iso(val):
     """Adapt datetime.datetime to timezone-naive ISO 8601 date."""
     return val.isoformat()
 
-def adapt_datetime_epoch(val):
-    """Adapt datetime.datetime to Unix timestamp."""
-    return int(val.timestamp())
-
 sqlite3.register_adapter(datetime, adapt_datetime_iso)
-sqlite3.register_adapter(datetime, adapt_datetime_epoch)
 
 def convert_datetime(val):
     """Convert ISO 8601 datetime to datetime.datetime object."""
-    return datetime.datetime.fromisoformat(val)
-
-def convert_timestamp(val):
-    """Convert Unix epoch timestamp to datetime.datetime object."""
-    return datetime.datetime.fromtimestamp(val)
+    return datetime.fromisoformat(val.decode("utf-8"))
 
 sqlite3.register_converter("datetime", convert_datetime)
-sqlite3.register_converter("timestamp", convert_timestamp)
 
 def cosine_similarity(a, b):
     return np.dot(a, b) / (norm(a) * norm(b))
@@ -100,7 +90,7 @@ class Storage:
 
     def _create_database(self, name="issues"):
         db_name = f"{name}.db"
-        con = sqlite3.connect(db_name)
+        con = sqlite3.connect(db_name, detect_types=sqlite3.PARSE_DECLTYPES)
         con.execute("PRAGMA journal_mode=WAL;")
         con.execute("PRAGMA synchronous=NORMAL;")
         return con
@@ -226,8 +216,7 @@ class Storage:
 
             if (
                 existing_bug is None
-                or datetime.strptime(existing_bug[0], "%Y-%m-%d %H:%M:%S.%f%z")
-                < b.bug.date_last_updated
+                or existing_bug[0] < b.bug.date_last_updated
             ):
                 self.con.execute("BEGIN TRANSACTION")
                 # Bug is not in database or is outdated, so insert or update it
@@ -374,7 +363,7 @@ class Storage:
         cur = self.con.cursor()
         cur.execute("SELECT last_updated FROM update_history WHERE rowid = 1")
         result = cur.fetchone()
-        return datetime.strptime(result[0], "%Y-%m-%d %H:%M:%S.%f%z") if result else None
+        return result[0] if result else None
 
     def get_issue_related_with_text_id(self, text_id):
         cur = self.con.cursor()
