@@ -3,7 +3,7 @@ import sqlite3
 import numpy as np
 import pprint
 from numpy.linalg import norm
-from datetime import datetime
+from datetime import datetime, UTC
 from tqdm import tqdm
 from launchpadlib.launchpad import Launchpad
 from transformers import AutoTokenizer, AutoModel
@@ -21,10 +21,30 @@ BUG_STATES = [
     "Won't Fix",
 ]
 
+def adapt_datetime_iso(val):
+    """Adapt datetime.datetime to timezone-naive ISO 8601 date."""
+    return val.isoformat()
+
+def adapt_datetime_epoch(val):
+    """Adapt datetime.datetime to Unix timestamp."""
+    return int(val.timestamp())
+
+sqlite3.register_adapter(datetime, adapt_datetime_iso)
+sqlite3.register_adapter(datetime, adapt_datetime_epoch)
+
+def convert_datetime(val):
+    """Convert ISO 8601 datetime to datetime.datetime object."""
+    return datetime.datetime.fromisoformat(val)
+
+def convert_timestamp(val):
+    """Convert Unix epoch timestamp to datetime.datetime object."""
+    return datetime.datetime.fromtimestamp(val)
+
+sqlite3.register_converter("datetime", convert_datetime)
+sqlite3.register_converter("timestamp", convert_timestamp)
 
 def cosine_similarity(a, b):
     return np.dot(a, b) / (norm(a) * norm(b))
-
 
 class Search:
     def __init__(self, storage):
@@ -354,7 +374,7 @@ class Storage:
         cur = self.con.cursor()
         cur.execute("SELECT last_updated FROM update_history WHERE rowid = 1")
         result = cur.fetchone()
-        return datetime.strptime(result[0], "%Y-%m-%d %H:%M:%S.%f") if result else None
+        return datetime.strptime(result[0], "%Y-%m-%d %H:%M:%S.%f%z") if result else None
 
     def get_issue_related_with_text_id(self, text_id):
         cur = self.con.cursor()
@@ -381,7 +401,7 @@ class Storage:
             "Bug Triage Assistant", "production", CACHEDIR, version="devel"
         )
         project = lp.projects[args.project]
-        current_date = datetime.utcnow()
+        current_date = datetime.now(UTC)
         last_updated = self.get_last_updated()
         if last_updated:
             tqdm.write(f"Last update: {last_updated}")

@@ -2,7 +2,7 @@
 launchpadlib >= 1.11
 keyring >= 23.9
 tqdm >= 4.66
-torch == 2.1+cpu
+torch == 2.3+cpu
 transformers >= 4.34
 fastapi >= 0.110.0
 uvicorn[standard] >= 0.28.0
