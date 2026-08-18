@@ -28,8 +28,8 @@ There's also a clunky web front-end that can be run using `python3 server.py`, w
 
 ## How it works
 The tool downloads all texts associated with all issues in a specified project and stores them in a local sqlite3 database. After the texts are downloaded, it calculates a vector embedding of each of these texts and stores them in the database as well. 
-These vector embeddings have an interesting characteristic - they represent semantic meaning of the text, so similar texts should have similar embeddings. The tool uses cosine similarity as the measure of how close in meaning the query and each of the texts are,
-and produces a list of issues with the highest similarities. This lets you query the issue database for e.g. "user confused about the UI", or "unexpected behavior related to storage provisioning" and get issues related to these queries, instead of
+These vector embeddings have an interesting characteristic - they represent semantic meaning of the text, so similar texts should have similar embeddings. The ranking is done inside sqlite3 by the [sqlite-vec](https://github.com/asg017/sqlite-vec) native extension,
+which computes the cosine distance between the query embedding and every stored embedding, and produces a list of issues with the highest similarities. This lets you query the issue database for e.g. "user confused about the UI", or "unexpected behavior related to storage provisioning" and get issues related to these queries, instead of
 specifying the exact keywords in your searches.
 
 ## Status

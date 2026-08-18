@@ -1,8 +1,7 @@
 import argparse
 import sqlite3
-import numpy as np
+import sqlite_vec
 import pprint
-from numpy.linalg import norm
 from datetime import datetime, UTC
 from tqdm import tqdm
 from launchpadlib.launchpad import Launchpad
@@ -33,23 +32,17 @@ def convert_datetime(val):
 
 sqlite3.register_converter("datetime", convert_datetime)
 
-def cosine_similarity(a, b):
-    return np.dot(a, b) / (norm(a) * norm(b))
-
 class Search:
+    # Texts fetched per requested issue; several texts usually belong to the
+    # same issue, so the candidate window has to be wider than the issue limit.
+    CANDIDATES_PER_ISSUE = 10
+
     def __init__(self, storage):
         self.storage = storage
-        self.embeddings = []
-        self.load_embeddings()
 
-    def load_embeddings(self):
-        self.embeddings = list(self.storage.get_embeddings())
-
-    def find_similar_texts(self, prompt):
+    def find_similar_texts(self, prompt, limit=None):
         q = self.storage.generate_embedding(prompt)
-        return sorted(
-            ((cosine_similarity(q, e), i) for i, e in self.embeddings), reverse=True
-        )
+        return self.storage.search_embeddings(q, limit)
 
     def _add_scores(self, nested_dict, score_mapping):
         if "text_id" in nested_dict:
@@ -62,18 +55,31 @@ class Search:
                     for item in v:
                         self._add_scores(item, score_mapping)
 
+    def _collect_issues(self, embedding, limit):
+        """Walk the ranked texts until `limit` distinct issues are collected,
+        widening the candidate window when one batch does not hold enough."""
+        candidates = limit * self.CANDIDATES_PER_ISSUE
+        while True:
+            scores = self.storage.search_embeddings(embedding, candidates)
+            top_scores = []
+            unique_issues = set()
+            for similarity, text_id in scores:
+                bug_id = self.storage.get_issue_related_with_text_id(text_id)
+                top_scores.append((text_id, str(similarity)))
+                unique_issues.add(bug_id)
+                if len(unique_issues) == limit:
+                    return top_scores, unique_issues
+            if len(scores) < candidates:
+                return top_scores, unique_issues  # whole table exhausted
+            candidates *= 4
+
     def find_similar_issues(self, prompt, limit=10):
-        top_scores = []
-        unique_issues = set()
         matching_issues = []
-        scores = self.find_similar_texts(prompt)
-        for similarity, text_id in scores:
-            bug_id = self.storage.get_issue_related_with_text_id(text_id)
-            top_scores.append((text_id, str(similarity)))
-            unique_issues.add(bug_id)
-            if len(unique_issues) == limit:
-                break
-        text_id_to_score = {text_id: score for score, text_id in scores}
+        embedding = self.storage.generate_embedding(prompt)
+        top_scores, unique_issues = self._collect_issues(embedding, limit)
+        # Every text of a returned issue is shown with its score, and most of
+        # them rank below the candidate window, so score them separately.
+        text_id_to_score = self.storage.score_issue_texts(embedding, unique_issues)
         for bug_id in unique_issues:
             issue = self.storage.get_bug(bug_id)
             self._add_scores(issue, text_id_to_score)
@@ -91,6 +97,9 @@ class Storage:
     def _create_database(self, name="issues"):
         db_name = f"{name}.db"
         con = sqlite3.connect(db_name, detect_types=sqlite3.PARSE_DECLTYPES)
+        con.enable_load_extension(True)
+        sqlite_vec.load(con)
+        con.enable_load_extension(False)
         con.execute("PRAGMA journal_mode=WAL;")
         con.execute("PRAGMA synchronous=NORMAL;")
         return con
@@ -343,13 +352,46 @@ class Storage:
         finally:
             cur.close()
 
-    def get_embeddings(self):
+    def search_embeddings(self, embedding, limit=None):
+        """Rank stored embeddings against a query embedding, most similar first."""
         cur = self.con.cursor()
-        cur.execute("SELECT text_id, embedding FROM embeddings")
-        embeddings = cur.fetchall()
-        return (
-            (text_id, np.frombuffer(b, dtype=np.float32)) for text_id, b in embeddings
+        cur.execute(
+            """
+            SELECT 1 - vec_distance_cosine(embedding, ?) AS similarity, text_id
+            FROM embeddings
+            ORDER BY similarity DESC
+            LIMIT ?
+            """,
+            (embedding.tobytes(), -1 if limit is None else limit),
         )
+        scores = cur.fetchall()
+        cur.close()
+        return scores
+
+    def score_issue_texts(self, embedding, bug_ids):
+        """Similarity of every text belonging to the given issues."""
+        if not bug_ids:
+            return {}
+        bug_ids = tuple(bug_ids)
+        placeholders = ",".join("?" * len(bug_ids))
+        cur = self.con.cursor()
+        cur.execute(
+            f"""
+            SELECT text_id, 1 - vec_distance_cosine(embedding, ?)
+            FROM embeddings
+            WHERE text_id IN (
+                SELECT title_id FROM issues WHERE bug_id IN ({placeholders})
+                UNION
+                SELECT description_id FROM issues WHERE bug_id IN ({placeholders})
+                UNION
+                SELECT text_id FROM issue_comments WHERE bug_id IN ({placeholders})
+            )
+            """,
+            (embedding.tobytes(), *bug_ids, *bug_ids, *bug_ids),
+        )
+        scores = dict(cur.fetchall())
+        cur.close()
+        return scores
 
     def set_last_updated(self, date):
         cur = self.con.cursor()
